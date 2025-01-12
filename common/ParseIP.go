@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"regexp"
@@ -23,11 +24,21 @@ var ParseIPErr = errors.New(" host parsing error\n" +
 	"192.168.1.1-255")
 
 func ParseIP(host string, filename string, nohosts ...string) (hosts []string, err error) {
-	hosts = ParseIPs(host)
-	if filename != "" {
-		var filehost []string
-		filehost, _ = Readipfile(filename)
-		hosts = append(hosts, filehost...)
+	if filename == "" && strings.Contains(host, ":") {
+		//192.168.0.0/16:80
+		hostport := strings.Split(host, ":")
+		if len(hostport) == 2 {
+			host = hostport[0]
+			hosts = ParseIPs(host)
+			Ports = hostport[1]
+		}
+	} else {
+		hosts = ParseIPs(host)
+		if filename != "" {
+			var filehost []string
+			filehost, _ = Readipfile(filename)
+			hosts = append(hosts, filehost...)
+		}
 	}
 
 	if len(nohosts) > 0 {
@@ -54,7 +65,7 @@ func ParseIP(host string, filename string, nohosts ...string) (hosts []string, e
 		}
 	}
 	hosts = RemoveDuplicate(hosts)
-	if len(hosts) == 0 && host != "" && filename != "" {
+	if len(hosts) == 0 && len(HostPort) == 0 && host != "" && filename != "" {
 		err = ParseIPErr
 	}
 	return
@@ -77,19 +88,28 @@ func ParseIPs(ip string) (hosts []string) {
 func parseIP(ip string) []string {
 	reg := regexp.MustCompile(`[a-zA-Z]+`)
 	switch {
+	case ip == "192":
+		return parseIP("192.168.0.0/16")
+	case ip == "172":
+		return parseIP("172.16.0.0/12")
+	case ip == "10":
+		return parseIP("10.0.0.0/8")
+	// 扫描/8时,只扫网关和随机IP,避免扫描过多IP
+	case strings.HasSuffix(ip, "/8"):
+		return parseIP8(ip)
 	//解析 /24 /16 /8 /xxx 等
 	case strings.Contains(ip, "/"):
 		return parseIP2(ip)
+	//可能是域名,用lookup获取ip
+	case reg.MatchString(ip):
+		//	_, err := net.LookupHost(ip)
+		//	if err != nil {
+		//		return nil
+		//	}
+		return []string{ip}
 	//192.168.1.1-192.168.1.100
 	case strings.Contains(ip, "-"):
 		return parseIP1(ip)
-	//可能是域名,用lookup获取ip
-	case reg.MatchString(ip):
-		_, err := net.LookupHost(ip)
-		if err != nil {
-			return nil
-		}
-		return []string{ip}
 	//处理单个ip
 	default:
 		testIP := net.ParseIP(ip)
@@ -110,7 +130,10 @@ func parseIP2(host string) (hosts []string) {
 	return
 }
 
-// 解析ip段: 192.168.111.1-255,192.168.111.1-192.168.112.255
+// 解析ip段:
+//
+//	192.168.111.1-255
+//	192.168.111.1-192.168.112.255
 func parseIP1(ip string) []string {
 	IPRange := strings.Split(ip, "-")
 	testIP := net.ParseIP(IPRange[0])
@@ -181,10 +204,23 @@ func Readipfile(filename string) ([]string, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Split(bufio.ScanLines)
 	for scanner.Scan() {
-		text := strings.TrimSpace(scanner.Text())
-		if text != "" {
-			host := ParseIPs(text)
-			content = append(content, host...)
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			text := strings.Split(line, ":")
+			if len(text) == 2 {
+				port := strings.Split(text[1], " ")[0]
+				num, err := strconv.Atoi(port)
+				if err != nil || (num < 1 || num > 65535) {
+					continue
+				}
+				hosts := ParseIPs(text[0])
+				for _, host := range hosts {
+					HostPort = append(HostPort, fmt.Sprintf("%s:%s", host, port))
+				}
+			} else {
+				host := ParseIPs(line)
+				content = append(content, host...)
+			}
 		}
 	}
 	return content, nil
@@ -201,4 +237,38 @@ func RemoveDuplicate(old []string) []string {
 		}
 	}
 	return result
+}
+
+func parseIP8(ip string) []string {
+	realIP := ip[:len(ip)-2]
+	testIP := net.ParseIP(realIP)
+
+	if testIP == nil {
+		return nil
+	}
+
+	IPrange := strings.Split(ip, ".")[0]
+	var AllIP []string
+	for a := 0; a <= 255; a++ {
+		for b := 0; b <= 255; b++ {
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, 1))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, 2))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, 4))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, 5))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, RandInt(6, 55)))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, RandInt(56, 100)))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, RandInt(101, 150)))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, RandInt(151, 200)))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, RandInt(201, 253)))
+			AllIP = append(AllIP, fmt.Sprintf("%s.%d.%d.%d", IPrange, a, b, 254))
+		}
+	}
+	return AllIP
+}
+
+func RandInt(min, max int) int {
+	if min >= max || min == 0 || max == 0 {
+		return max
+	}
+	return rand.Intn(max-min) + min
 }

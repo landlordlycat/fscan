@@ -10,6 +10,9 @@ import (
 )
 
 func SmbScan(info *common.HostInfo) (tmperr error) {
+	if common.IsBrute {
+		return nil
+	}
 	starttime := time.Now().Unix()
 	for _, user := range common.Userdict["smb"] {
 		for _, pass := range common.Passwords {
@@ -17,10 +20,10 @@ func SmbScan(info *common.HostInfo) (tmperr error) {
 			flag, err := doWithTimeOut(info, user, pass)
 			if flag == true && err == nil {
 				var result string
-				if info.Domain != "" {
-					result = fmt.Sprintf("[+] SMB:%v:%v:%v\\%v %v", info.Host, info.Ports, info.Domain, user, pass)
+				if common.Domain != "" {
+					result = fmt.Sprintf("[+] SMB %v:%v:%v\\%v %v", info.Host, info.Ports, common.Domain, user, pass)
 				} else {
-					result = fmt.Sprintf("[+] SMB:%v:%v:%v %v", info.Host, info.Ports, user, pass)
+					result = fmt.Sprintf("[+] SMB %v:%v:%v %v", info.Host, info.Ports, user, pass)
 				}
 				common.LogSuccess(result)
 				return err
@@ -32,7 +35,7 @@ func SmbScan(info *common.HostInfo) (tmperr error) {
 				if common.CheckErrs(err) {
 					return err
 				}
-				if time.Now().Unix()-starttime > (int64(len(common.Userdict["smb"])*len(common.Passwords)) * info.Timeout) {
+				if time.Now().Unix()-starttime > (int64(len(common.Userdict["smb"])*len(common.Passwords)) * common.Timeout) {
 					return err
 				}
 			}
@@ -49,7 +52,7 @@ func SmblConn(info *common.HostInfo, user string, pass string, signal chan struc
 		Port:        445,
 		User:        Username,
 		Password:    Password,
-		Domain:      info.Domain,
+		Domain:      common.Domain,
 		Workstation: "",
 	}
 
@@ -72,7 +75,7 @@ func doWithTimeOut(info *common.HostInfo, user string, pass string) (flag bool, 
 	select {
 	case <-signal:
 		return flag, err
-	case <-time.After(time.Duration(info.Timeout) * time.Second):
-		return false,errors.New("time out")
+	case <-time.After(time.Duration(common.Timeout) * time.Second):
+		return false, errors.New("time out")
 	}
 }

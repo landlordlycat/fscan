@@ -5,15 +5,16 @@ import (
 	"compress/gzip"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/interpreter/functions"
+	"github.com/shadow1ng/fscan/common"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -28,6 +29,9 @@ func NewEnv(c *CustomLib) (*cel.Env, error) {
 }
 
 func Evaluate(env *cel.Env, expression string, params map[string]interface{}) (ref.Val, error) {
+	if expression == "" {
+		return types.Bool(true), nil
+	}
 	ast, iss := env.Compile(expression)
 	if iss.Err() != nil {
 		//fmt.Printf("compile: ", iss.Err())
@@ -103,7 +107,7 @@ func NewEnvOption() CustomLib {
 		cel.Declarations(
 			decls.NewIdent("request", decls.NewObjectType("lib.Request"), nil),
 			decls.NewIdent("response", decls.NewObjectType("lib.Response"), nil),
-			//decls.NewIdent("reverse", decls.NewObjectType("lib.Reverse"), nil),
+			decls.NewIdent("reverse", decls.NewObjectType("lib.Reverse"), nil),
 		),
 		cel.Declarations(
 			// functions
@@ -129,6 +133,10 @@ func NewEnvOption() CustomLib {
 					decls.String)),
 			decls.NewFunction("randomUppercase",
 				decls.NewOverload("randomUppercase_int",
+					[]*exprpb.Type{decls.Int},
+					decls.String)),
+			decls.NewFunction("randomString",
+				decls.NewOverload("randomString_int",
 					[]*exprpb.Type{decls.Int},
 					decls.String)),
 			decls.NewFunction("base64",
@@ -175,6 +183,26 @@ func NewEnvOption() CustomLib {
 				decls.NewInstanceOverload("icontains_string",
 					[]*exprpb.Type{decls.String, decls.String},
 					decls.Bool)),
+			decls.NewFunction("TDdate",
+				decls.NewOverload("tongda_date",
+					[]*exprpb.Type{},
+					decls.String)),
+			decls.NewFunction("shirokey",
+				decls.NewOverload("shiro_key",
+					[]*exprpb.Type{decls.String, decls.String},
+					decls.String)),
+			decls.NewFunction("startsWith",
+				decls.NewInstanceOverload("startsWith_bytes",
+					[]*exprpb.Type{decls.Bytes, decls.Bytes},
+					decls.Bool)),
+			decls.NewFunction("istartsWith",
+				decls.NewInstanceOverload("startsWith_string",
+					[]*exprpb.Type{decls.String, decls.String},
+					decls.Bool)),
+			decls.NewFunction("hexdecode",
+				decls.NewInstanceOverload("hexdecode",
+					[]*exprpb.Type{decls.String},
+					decls.Bytes)),
 		),
 	}
 	c.programOptions = []cel.ProgramOption{
@@ -254,6 +282,16 @@ func NewEnvOption() CustomLib {
 						return types.ValOrErr(value, "unexpected type '%v' passed to randomUppercase", value.Type())
 					}
 					return types.String(randomUppercase(int(n)))
+				},
+			},
+			&functions.Overload{
+				Operator: "randomString_int",
+				Unary: func(value ref.Val) ref.Val {
+					n, ok := value.(types.Int)
+					if !ok {
+						return types.ValOrErr(value, "unexpected type '%v' passed to randomString", value.Type())
+					}
+					return types.String(randomString(int(n)))
 				},
 			},
 			&functions.Overload{
@@ -407,6 +445,75 @@ func NewEnvOption() CustomLib {
 					return types.Bool(strings.Contains(strings.ToLower(string(v1)), strings.ToLower(string(v2))))
 				},
 			},
+			&functions.Overload{
+				Operator: "tongda_date",
+				Function: func(value ...ref.Val) ref.Val {
+					return types.String(time.Now().Format("0601"))
+				},
+			},
+			&functions.Overload{
+				Operator: "shiro_key",
+				Binary: func(key ref.Val, mode ref.Val) ref.Val {
+					v1, ok := key.(types.String)
+					if !ok {
+						return types.ValOrErr(key, "unexpected type '%v' passed to shiro_key", key.Type())
+					}
+					v2, ok := mode.(types.String)
+					if !ok {
+						return types.ValOrErr(mode, "unexpected type '%v' passed to shiro_mode", mode.Type())
+					}
+					cookie := GetShrioCookie(string(v1), string(v2))
+					if cookie == "" {
+						return types.NewErr("%v", "key b64decode failed")
+					}
+					return types.String(cookie)
+				},
+			},
+			&functions.Overload{
+				Operator: "startsWith_bytes",
+				Binary: func(lhs ref.Val, rhs ref.Val) ref.Val {
+					v1, ok := lhs.(types.Bytes)
+					if !ok {
+						return types.ValOrErr(lhs, "unexpected type '%v' passed to startsWith_bytes", lhs.Type())
+					}
+					v2, ok := rhs.(types.Bytes)
+					if !ok {
+						return types.ValOrErr(rhs, "unexpected type '%v' passed to startsWith_bytes", rhs.Type())
+					}
+					// 不区分大小写包含
+					return types.Bool(bytes.HasPrefix(v1, v2))
+				},
+			},
+			&functions.Overload{
+				Operator: "startsWith_string",
+				Binary: func(lhs ref.Val, rhs ref.Val) ref.Val {
+					v1, ok := lhs.(types.String)
+					if !ok {
+						return types.ValOrErr(lhs, "unexpected type '%v' passed to startsWith_string", lhs.Type())
+					}
+					v2, ok := rhs.(types.String)
+					if !ok {
+						return types.ValOrErr(rhs, "unexpected type '%v' passed to startsWith_string", rhs.Type())
+					}
+					// 不区分大小写包含
+					return types.Bool(strings.HasPrefix(strings.ToLower(string(v1)), strings.ToLower(string(v2))))
+				},
+			},
+			&functions.Overload{
+				Operator: "hexdecode",
+				Unary: func(lhs ref.Val) ref.Val {
+					v1, ok := lhs.(types.String)
+					if !ok {
+						return types.ValOrErr(lhs, "unexpected type '%v' passed to hexdecode", lhs.Type())
+					}
+					out, err := hex.DecodeString(string(v1))
+					if err != nil {
+						return types.ValOrErr(lhs, "hexdecode error: %v", err)
+					}
+					// 不区分大小写包含
+					return types.Bytes(out)
+				},
+			},
 		),
 	}
 	return c
@@ -421,8 +528,9 @@ func (c *CustomLib) ProgramOptions() []cel.ProgramOption {
 	return c.programOptions
 }
 
-func (c *CustomLib) UpdateCompileOptions(args map[string]string) {
-	for k, v := range args {
+func (c *CustomLib) UpdateCompileOptions(args StrMap) {
+	for _, item := range args {
+		k, v := item.Key, item.Value
 		// 在执行之前是不知道变量的类型的，所以统一声明为字符型
 		// 所以randomInt虽然返回的是int型，在运算中却被当作字符型进行计算，需要重载string_*_string
 		var d *exprpb.Decl
@@ -445,18 +553,23 @@ func randomLowercase(n int) string {
 }
 
 func randomUppercase(n int) string {
-	lowercase := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	return RandomStr(randSource, lowercase, n)
+	uppercase := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	return RandomStr(randSource, uppercase, n)
+}
+
+func randomString(n int) string {
+	charset := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	return RandomStr(randSource, charset, n)
 }
 
 func reverseCheck(r *Reverse, timeout int64) bool {
-	if ceyeApi == "" || r.Domain == "" {
+	if ceyeApi == "" || r.Domain == "" || !common.DnsLog {
 		return false
 	}
 	time.Sleep(time.Second * time.Duration(timeout))
 	sub := strings.Split(r.Domain, ".")[0]
 	urlStr := fmt.Sprintf("http://api.ceye.io/v1/records?token=%s&type=dns&filter=%s", ceyeApi, sub)
-	fmt.Println(urlStr)
+	//fmt.Println(urlStr)
 	req, _ := http.NewRequest("GET", urlStr, nil)
 	resp, err := DoRequest(req, false)
 	if err != nil {
@@ -464,6 +577,7 @@ func reverseCheck(r *Reverse, timeout int64) bool {
 	}
 
 	if !bytes.Contains(resp.Body, []byte(`"data": []`)) && bytes.Contains(resp.Body, []byte(`"message": "OK"`)) { // api返回结果不为空
+		fmt.Println(urlStr)
 		return true
 	}
 	return false
@@ -499,7 +613,6 @@ func DoRequest(req *http.Request, redirect bool) (*Response, error) {
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
 	}
-
 	var oResp *http.Response
 	var err error
 	if redirect {
@@ -508,12 +621,14 @@ func DoRequest(req *http.Request, redirect bool) (*Response, error) {
 		oResp, err = ClientNoRedirect.Do(req)
 	}
 	if err != nil {
+		//fmt.Println("[-]DoRequest error: ",err)
 		return nil, err
 	}
 	defer oResp.Body.Close()
 	resp, err := ParseResponse(oResp)
 	if err != nil {
-		return nil, err
+		common.LogError("[-] ParseResponse error: " + err.Error())
+		//return nil, err
 	}
 	return resp, err
 }
@@ -542,12 +657,12 @@ func ParseRequest(oReq *http.Request) (*Request, error) {
 	req.ContentType = oReq.Header.Get("Content-Type")
 	if oReq.Body == nil || oReq.Body == http.NoBody {
 	} else {
-		data, err := ioutil.ReadAll(oReq.Body)
+		data, err := io.ReadAll(oReq.Body)
 		if err != nil {
 			return nil, err
 		}
 		req.Body = data
-		oReq.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+		oReq.Body = io.NopCloser(bytes.NewBuffer(data))
 	}
 	return req, nil
 }
@@ -562,42 +677,21 @@ func ParseResponse(oResp *http.Response) (*Response, error) {
 	}
 	resp.Headers = header
 	resp.ContentType = oResp.Header.Get("Content-Type")
-	body, err := getRespBody(oResp)
-	if err != nil {
-		return nil, err
-	}
+	body, _ := getRespBody(oResp)
 	resp.Body = body
 	return &resp, nil
 }
 
-func getRespBody(oResp *http.Response) ([]byte, error) {
-	var body []byte
-	if oResp.Header.Get("Content-Encoding") == "gzip" {
-		gr, err := gzip.NewReader(oResp.Body)
-		if err != nil {
-			return nil, err
+func getRespBody(oResp *http.Response) (body []byte, err error) {
+	body, err = io.ReadAll(oResp.Body)
+	if strings.Contains(oResp.Header.Get("Content-Encoding"), "gzip") {
+		reader, err1 := gzip.NewReader(bytes.NewReader(body))
+		if err1 == nil {
+			body, err = io.ReadAll(reader)
 		}
-		defer gr.Close()
-		for {
-			buf := make([]byte, 1024)
-			n, err := gr.Read(buf)
-			if err != nil && err != io.EOF {
-				//utils.Logger.Error(err)
-				return nil, err
-			}
-			if n == 0 {
-				break
-			}
-			body = append(body, buf...)
-		}
-	} else {
-		raw, err := ioutil.ReadAll(oResp.Body)
-		if err != nil {
-			//utils.Logger.Error(err)
-			return nil, err
-		}
-		defer oResp.Body.Close()
-		body = raw
 	}
-	return body, nil
+	if err == io.EOF {
+		err = nil
+	}
+	return
 }

@@ -15,12 +15,11 @@ import (
 
 var (
 	AliveHosts []string
-	OS         = runtime.GOOS
 	ExistHosts = make(map[string]struct{})
 	livewg     sync.WaitGroup
 )
 
-func ICMPRun(hostslist []string, Ping bool) []string {
+func CheckLive(hostslist []string, Ping bool) []string {
 	chanHosts := make(chan string, len(hostslist))
 	go func() {
 		for ip := range chanHosts {
@@ -28,9 +27,9 @@ func ICMPRun(hostslist []string, Ping bool) []string {
 				ExistHosts[ip] = struct{}{}
 				if common.Silent == false {
 					if Ping == false {
-						fmt.Printf("(icmp) Target '%s' is alive\n", ip)
+						fmt.Printf("(icmp) Target %-15s is alive\n", ip)
 					} else {
-						fmt.Printf("(ping) Target '%s' is alive\n", ip)
+						fmt.Printf("(ping) Target %-15s is alive\n", ip)
 					}
 				}
 				AliveHosts = append(AliveHosts, ip)
@@ -50,9 +49,10 @@ func ICMPRun(hostslist []string, Ping bool) []string {
 		} else {
 			common.LogError(err)
 			//尝试无监听icmp探测
+			fmt.Println("trying RunIcmp2")
 			conn, err := net.DialTimeout("ip4:icmp", "127.0.0.1", 3*time.Second)
 			defer func() {
-				if conn != nil{
+				if conn != nil {
 					conn.Close()
 				}
 			}()
@@ -70,6 +70,22 @@ func ICMPRun(hostslist []string, Ping bool) []string {
 
 	livewg.Wait()
 	close(chanHosts)
+
+	if len(hostslist) > 1000 {
+		arrTop, arrLen := ArrayCountValueTop(AliveHosts, common.LiveTop, true)
+		for i := 0; i < len(arrTop); i++ {
+			output := fmt.Sprintf("[*] LiveTop %-16s 段存活数量为: %d", arrTop[i]+".0.0/16", arrLen[i])
+			common.LogSuccess(output)
+		}
+	}
+	if len(hostslist) > 256 {
+		arrTop, arrLen := ArrayCountValueTop(AliveHosts, common.LiveTop, false)
+		for i := 0; i < len(arrTop); i++ {
+			output := fmt.Sprintf("[*] LiveTop %-16s 段存活数量为: %d", arrTop[i]+".0/24", arrLen[i])
+			common.LogSuccess(output)
+		}
+	}
+
 	return AliveHosts
 }
 
@@ -100,7 +116,7 @@ func RunIcmp1(hostslist []string, conn *icmp.PacketConn, chanHosts chan string) 
 		if len(AliveHosts) == len(hostslist) {
 			break
 		}
-		since := time.Now().Sub(start)
+		since := time.Since(start)
 		var wait time.Duration
 		switch {
 		case len(hostslist) <= 256:
@@ -142,14 +158,10 @@ func RunIcmp2(hostslist []string, chanHosts chan string) {
 func icmpalive(host string) bool {
 	startTime := time.Now()
 	conn, err := net.DialTimeout("ip4:icmp", host, 6*time.Second)
-	defer func() {
-		if conn != nil{
-			conn.Close()
-		}
-	}()
 	if err != nil {
 		return false
 	}
+	defer conn.Close()
 	if err := conn.SetDeadline(startTime.Add(6 * time.Second)); err != nil {
 		return false
 	}
@@ -167,17 +179,13 @@ func icmpalive(host string) bool {
 }
 
 func RunPing(hostslist []string, chanHosts chan string) {
-	var bsenv = ""
-	if OS != "windows" {
-		bsenv = "/bin/bash"
-	}
 	var wg sync.WaitGroup
 	limiter := make(chan struct{}, 50)
 	for _, host := range hostslist {
 		wg.Add(1)
 		limiter <- struct{}{}
 		go func(host string) {
-			if ExecCommandPing(host, bsenv) {
+			if ExecCommandPing(host) {
 				livewg.Add(1)
 				chanHosts <- host
 			}
@@ -188,14 +196,15 @@ func RunPing(hostslist []string, chanHosts chan string) {
 	wg.Wait()
 }
 
-func ExecCommandPing(ip string, bsenv string) bool {
+func ExecCommandPing(ip string) bool {
 	var command *exec.Cmd
-	if OS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		command = exec.Command("cmd", "/c", "ping -n 1 -w 1 "+ip+" && echo true || echo false") //ping -c 1 -i 0.5 -t 4 -W 2 -w 5 "+ip+" >/dev/null && echo true || echo false"
-	} else if OS == "linux" {
-		command = exec.Command(bsenv, "-c", "ping -c 1 -w 1 "+ip+" >/dev/null && echo true || echo false") //ping -c 1 -i 0.5 -t 4 -W 2 -w 5 "+ip+" >/dev/null && echo true || echo false"
-	} else if OS == "darwin" {
-		command = exec.Command(bsenv, "-c", "ping -c 1 -W 1 "+ip+" >/dev/null && echo true || echo false") //ping -c 1 -i 0.5 -t 4 -W 2 -w 5 "+ip+" >/dev/null && echo true || echo false"
+	case "darwin":
+		command = exec.Command("/bin/bash", "-c", "ping -c 1 -W 1 "+ip+" && echo true || echo false") //ping -c 1 -i 0.5 -t 4 -W 2 -w 5 "+ip+" >/dev/null && echo true || echo false"
+	default: //linux
+		command = exec.Command("/bin/bash", "-c", "ping -c 1 -w 1 "+ip+" && echo true || echo false") //ping -c 1 -i 0.5 -t 4 -W 2 -w 5 "+ip+" >/dev/null && echo true || echo false"
 	}
 	outinfo := bytes.Buffer{}
 	command.Stdout = &outinfo
@@ -206,7 +215,7 @@ func ExecCommandPing(ip string, bsenv string) bool {
 	if err = command.Wait(); err != nil {
 		return false
 	} else {
-		if strings.Contains(outinfo.String(), "true") {
+		if strings.Contains(outinfo.String(), "true") && strings.Count(outinfo.String(), ip) > 2 {
 			return true
 		} else {
 			return false
@@ -252,4 +261,50 @@ func genSequence(v int16) (byte, byte) {
 
 func genIdentifier(host string) (byte, byte) {
 	return host[0], host[1]
+}
+
+func ArrayCountValueTop(arrInit []string, length int, flag bool) (arrTop []string, arrLen []int) {
+	if len(arrInit) == 0 {
+		return
+	}
+	arrMap1 := make(map[string]int)
+	arrMap2 := make(map[string]int)
+	for _, value := range arrInit {
+		line := strings.Split(value, ".")
+		if len(line) == 4 {
+			if flag {
+				value = fmt.Sprintf("%s.%s", line[0], line[1])
+			} else {
+				value = fmt.Sprintf("%s.%s.%s", line[0], line[1], line[2])
+			}
+		}
+		if arrMap1[value] != 0 {
+			arrMap1[value]++
+		} else {
+			arrMap1[value] = 1
+		}
+	}
+	for k, v := range arrMap1 {
+		arrMap2[k] = v
+	}
+
+	i := 0
+	for range arrMap1 {
+		var maxCountKey string
+		var maxCountVal = 0
+		for key, val := range arrMap2 {
+			if val > maxCountVal {
+				maxCountVal = val
+				maxCountKey = key
+			}
+		}
+		arrTop = append(arrTop, maxCountKey)
+		arrLen = append(arrLen, maxCountVal)
+		i++
+		if i >= length {
+			return
+		}
+		delete(arrMap2, maxCountKey)
+	}
+	return
 }

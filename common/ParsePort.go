@@ -11,7 +11,15 @@ func ParsePort(ports string) (scanPorts []int) {
 	}
 	slices := strings.Split(ports, ",")
 	for _, port := range slices {
-		port = strings.Trim(port, " ")
+		port = strings.TrimSpace(port)
+		if port == "" {
+			continue
+		}
+		if PortGroup[port] != "" {
+			port = PortGroup[port]
+			scanPorts = append(scanPorts, ParsePort(port)...)
+			continue
+		}
 		upper := port
 		if strings.Contains(port, "-") {
 			ranges := strings.Split(port, "-")
@@ -28,11 +36,13 @@ func ParsePort(ports string) (scanPorts []int) {
 				port = ranges[1]
 				upper = ranges[0]
 			}
-
 		}
 		start, _ := strconv.Atoi(port)
 		end, _ := strconv.Atoi(upper)
 		for i := start; i <= end; i++ {
+			if i > 65535 || i < 1 {
+				continue
+			}
 			scanPorts = append(scanPorts, i)
 		}
 	}

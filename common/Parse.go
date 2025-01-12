@@ -2,29 +2,29 @@ package common
 
 import (
 	"bufio"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func Parse(Info *HostInfo) {
-	ParseScantype(Info)
-	ParseUser(Info)
+	ParseUser()
 	ParsePass(Info)
 	ParseInput(Info)
+	ParseScantype(Info)
 }
 
-func ParseUser(Info *HostInfo) {
-	if Info.Username == "" && Userfile == "" {
+func ParseUser() {
+	if Username == "" && Userfile == "" {
 		return
 	}
-
-	if Info.Username != "" {
-		Info.Usernames = strings.Split(Info.Username, ",")
+	var Usernames []string
+	if Username != "" {
+		Usernames = strings.Split(Username, ",")
 	}
 
 	if Userfile != "" {
@@ -32,37 +32,65 @@ func ParseUser(Info *HostInfo) {
 		if err == nil {
 			for _, user := range users {
 				if user != "" {
-					Info.Usernames = append(Info.Usernames, user)
+					Usernames = append(Usernames, user)
 				}
 			}
 		}
 	}
 
-	Info.Usernames = RemoveDuplicate(Info.Usernames)
+	Usernames = RemoveDuplicate(Usernames)
 	for name := range Userdict {
-		Userdict[name] = Info.Usernames
+		Userdict[name] = Usernames
 	}
 }
 
 func ParsePass(Info *HostInfo) {
-	if Info.Password != "" {
-		passs := strings.Split(Info.Password, ",")
+	var PwdList []string
+	if Password != "" {
+		passs := strings.Split(Password, ",")
 		for _, pass := range passs {
 			if pass != "" {
-				Info.Passwords = append(Info.Passwords, pass)
+				PwdList = append(PwdList, pass)
 			}
 		}
-		Passwords = Info.Passwords
+		Passwords = PwdList
 	}
 	if Passfile != "" {
 		passs, err := Readfile(Passfile)
 		if err == nil {
 			for _, pass := range passs {
 				if pass != "" {
-					Info.Passwords = append(Info.Passwords, pass)
+					PwdList = append(PwdList, pass)
 				}
 			}
-			Passwords = Info.Passwords
+			Passwords = PwdList
+		}
+	}
+	if Hashfile != "" {
+		hashs, err := Readfile(Hashfile)
+		if err == nil {
+			for _, line := range hashs {
+				if line == "" {
+					continue
+				}
+				if len(line) == 32 {
+					Hashs = append(Hashs, line)
+				} else {
+					fmt.Println("[-] len(hash) != 32 " + line)
+				}
+			}
+		}
+	}
+	if URL != "" {
+		urls := strings.Split(URL, ",")
+		TmpUrls := make(map[string]struct{})
+		for _, url := range urls {
+			if _, ok := TmpUrls[url]; !ok {
+				TmpUrls[url] = struct{}{}
+				if url != "" {
+					Urls = append(Urls, url)
+				}
+			}
 		}
 	}
 	if UrlFile != "" {
@@ -77,6 +105,18 @@ func ParsePass(Info *HostInfo) {
 					}
 				}
 			}
+		}
+	}
+	if PortFile != "" {
+		ports, err := Readfile(PortFile)
+		if err == nil {
+			newport := ""
+			for _, port := range ports {
+				if port != "" {
+					newport += port + ","
+				}
+			}
+			Ports = newport
 		}
 	}
 }
@@ -107,49 +147,128 @@ func ParseInput(Info *HostInfo) {
 		os.Exit(0)
 	}
 
-	if TmpOutputfile != "" {
-		if !strings.Contains(Outputfile, "/") && !strings.Contains(Outputfile, `\`) {
-			Outputfile = getpath() + TmpOutputfile
-		} else {
-			Outputfile = TmpOutputfile
-		}
+	if BruteThread <= 0 {
+		BruteThread = 1
 	}
+
 	if TmpSave == true {
 		IsSave = false
 	}
-	if Info.Ports == DefaultPorts {
-		Info.Ports += "," + Webport
+
+	if Ports == DefaultPorts {
+		Ports += "," + Webport
 	}
+
+	if PortAdd != "" {
+		if strings.HasSuffix(Ports, ",") {
+			Ports += PortAdd
+		} else {
+			Ports += "," + PortAdd
+		}
+	}
+
+	if UserAdd != "" {
+		user := strings.Split(UserAdd, ",")
+		for a := range Userdict {
+			Userdict[a] = append(Userdict[a], user...)
+			Userdict[a] = RemoveDuplicate(Userdict[a])
+		}
+	}
+
+	if PassAdd != "" {
+		pass := strings.Split(PassAdd, ",")
+		Passwords = append(Passwords, pass...)
+		Passwords = RemoveDuplicate(Passwords)
+	}
+	if Socks5Proxy != "" && !strings.HasPrefix(Socks5Proxy, "socks5://") {
+		if !strings.Contains(Socks5Proxy, ":") {
+			Socks5Proxy = "socks5://127.0.0.1" + Socks5Proxy
+		} else {
+			Socks5Proxy = "socks5://" + Socks5Proxy
+		}
+	}
+	if Socks5Proxy != "" {
+		fmt.Println("Socks5Proxy:", Socks5Proxy)
+		_, err := url.Parse(Socks5Proxy)
+		if err != nil {
+			fmt.Println("Socks5Proxy parse error:", err)
+			os.Exit(0)
+		}
+		NoPing = true
+	}
+	if Proxy != "" {
+		if Proxy == "1" {
+			Proxy = "http://127.0.0.1:8080"
+		} else if Proxy == "2" {
+			Proxy = "socks5://127.0.0.1:1080"
+		} else if !strings.Contains(Proxy, "://") {
+			Proxy = "http://127.0.0.1:" + Proxy
+		}
+		fmt.Println("Proxy:", Proxy)
+		if !strings.HasPrefix(Proxy, "socks") && !strings.HasPrefix(Proxy, "http") {
+			fmt.Println("no support this proxy")
+			os.Exit(0)
+		}
+		_, err := url.Parse(Proxy)
+		if err != nil {
+			fmt.Println("Proxy parse error:", err)
+			os.Exit(0)
+		}
+	}
+
+	if Hash != "" && len(Hash) != 32 {
+		fmt.Println("[-] Hash is error,len(hash) must be 32")
+		os.Exit(0)
+	} else {
+		Hashs = append(Hashs, Hash)
+	}
+	Hashs = RemoveDuplicate(Hashs)
+	for _, hash := range Hashs {
+		hashbyte, err := hex.DecodeString(Hash)
+		if err != nil {
+			fmt.Println("[-] Hash is error,hex decode error ", hash)
+			continue
+		} else {
+			HashBytes = append(HashBytes, hashbyte)
+		}
+	}
+	Hashs = []string{}
 }
 
 func ParseScantype(Info *HostInfo) {
-	_, ok := PORTList[Info.Scantype]
+	_, ok := PORTList[Scantype]
 	if !ok {
 		showmode()
 	}
-	if Info.Scantype != "all" {
-		if Info.Ports == DefaultPorts {
-			switch Info.Scantype {
-			case "wmi":
-				Info.Ports = "135"
-			case "web":
-				Info.Ports = Webport
-			case "ms17010":
-				Info.Ports = "445"
-			case "cve20200796":
-				Info.Ports = "445"
-			case "smb2":
-				Info.Ports = "445"
-			case "portscan":
-				Info.Ports = DefaultPorts + "," + Webport
-			case "main":
-				Info.Ports = DefaultPorts
-			default:
-				port, _ := PORTList[Info.Scantype]
-				Info.Ports = strconv.Itoa(port)
-			}
-			fmt.Println("-m ", Info.Scantype, " start scan the port:", Info.Ports)
+	if Scantype != "all" && Ports == DefaultPorts+","+Webport {
+		switch Scantype {
+		case "wmiexec":
+			Ports = "135"
+		case "wmiinfo":
+			Ports = "135"
+		case "smbinfo":
+			Ports = "445"
+		case "hostname":
+			Ports = "135,137,139,445"
+		case "smb2":
+			Ports = "445"
+		case "web":
+			Ports = Webport
+		case "webonly":
+			Ports = Webport
+		case "ms17010":
+			Ports = "445"
+		case "cve20200796":
+			Ports = "445"
+		case "portscan":
+			Ports = DefaultPorts + "," + Webport
+		case "main":
+			Ports = DefaultPorts
+		default:
+			port, _ := PORTList[Scantype]
+			Ports = strconv.Itoa(port)
 		}
+		fmt.Println("-m ", Scantype, " start scan the port:", Ports)
 	}
 }
 
@@ -163,23 +282,6 @@ func CheckErr(text string, err error, flag bool) {
 			os.Exit(0)
 		}
 	}
-}
-
-func getpath() string {
-	file, _ := exec.LookPath(os.Args[0])
-	path1, _ := filepath.Abs(file)
-	filename := filepath.Dir(path1)
-	var path string
-	if strings.Contains(filename, "/") {
-		tmp := strings.Split(filename, `/`)
-		tmp[len(tmp)-1] = ``
-		path = strings.Join(tmp, `/`)
-	} else if strings.Contains(filename, `\`) {
-		tmp := strings.Split(filename, `\`)
-		tmp[len(tmp)-1] = ``
-		path = strings.Join(tmp, `\`)
-	}
-	return path
 }
 
 func showmode() {

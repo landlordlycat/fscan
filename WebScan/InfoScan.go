@@ -13,11 +13,11 @@ type CheckDatas struct {
 	Headers string
 }
 
-func InfoCheck(Url string, CheckData []CheckDatas) []string {
+func InfoCheck(Url string, CheckData *[]CheckDatas) []string {
 	var matched bool
 	var infoname []string
 
-	for _, data := range CheckData {
+	for _, data := range *CheckData {
 		for _, rule := range info.RuleDatas {
 			if rule.Type == "code" {
 				matched, _ = regexp.MatchString(rule.Rule, string(data.Body))
@@ -28,17 +28,17 @@ func InfoCheck(Url string, CheckData []CheckDatas) []string {
 				infoname = append(infoname, rule.Name)
 			}
 		}
-		flag, name := CalcMd5(data.Body)
+		//flag, name := CalcMd5(data.Body)
 
-		if flag == true {
-			infoname = append(infoname, name)
-		}
+		//if flag == true {
+		//	infoname = append(infoname, name)
+		//}
 	}
 
 	infoname = removeDuplicateElement(infoname)
 
 	if len(infoname) > 0 {
-		result := fmt.Sprintf("[+] InfoScan:%-25v %s ", Url, infoname)
+		result := fmt.Sprintf("[+] InfoScan %-25v %s ", Url, infoname)
 		common.LogSuccess(result)
 		return infoname
 	}
@@ -67,4 +67,3 @@ func removeDuplicateElement(languages []string) []string {
 	}
 	return result
 }
-
